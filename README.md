@@ -24,11 +24,12 @@ The Adaptive Compressed World Model Framework provides an efficient, scalable, a
 - **Interactive Visualization**: Graph-based knowledge visualization
 - **LLM Enhancement**: Ollama LLM integration for improved knowledge linking
 
-![alt text](image-1.png)
-![alt text](image.png)
+![image](https://github.com/user-attachments/assets/4e490f66-102b-4e75-a84d-47ae8e218967)
+
+![image](https://github.com/user-attachments/assets/183d76d5-803d-4d3a-95c4-c8dd4fe07230)
 
 Graph is still rough
-![alt text](image-2.png)
+![image](https://github.com/user-attachments/assets/a394d63e-744f-4305-a595-c853a234a828)
 
 ## Repository Structure
 
