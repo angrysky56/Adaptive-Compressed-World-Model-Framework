@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ACWMF File Upload</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css">
+    <style>
+        body {
+            padding-top: 2rem;
+            padding-bottom: 2rem;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 800px;
+        }
+        .header {
+            padding-bottom: 1rem;
+            border-bottom: 1px solid #e5e5e5;
+            margin-bottom: 2rem;
+        }
+        .alert {
+            display: none;
+            margin-top: 1rem;
+        }
+        .card {
+            margin-bottom: 1rem;
+        }
+        #filePreview {
+            max-height: 300px;
+            overflow-y: auto;
+            background-color: #f8f9fa;
+            padding: 1rem;
+            border-radius: 0.25rem;
+            font-family: monospace;
+            white-space: pre-wrap;
+            display: none;
+        }
+        .chip {
+            display: inline-block;
+            margin: 0.25rem;
+            padding: 0.25rem 0.5rem;
+            border-radius: 16px;
+            background-color: #e0e0e0;
+            font-size: 0.875rem;
+        }
+        .chip .close {
+            margin-left: 0.5rem;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        #entityContainer {
+            margin-top: 1rem;
+            margin-bottom: 1rem;
+        }
+        #resultContainer {
+            display: none;
+            margin-top: 2rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Adaptive Compressed World Model Framework</h1>
+            <h4>Knowledge Upload Tool</h4>
+        </div>
+
+        <div class="row">
+            <div class="col-md-12">
+                <ul class="nav nav-tabs" id="inputTabs" role="tablist">
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link active" id="text-tab" data-bs-toggle="tab" data-bs-target="#text" type="button" role="tab" aria-controls="text" aria-selected="true">Text Input</button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link" id="file-tab" data-bs-toggle="tab" data-bs-target="#file" type="button" role="tab" aria-controls="file" aria-selected="false">File Upload</button>
+                    </li>
+                </ul>
+                
+                <div class="tab-content" id="inputTabsContent">
+                    <div class="tab-pane fade show active" id="text" role="tabpanel" aria-labelledby="text-tab">
+                        <div class="card">
+                            <div class="card-body">
+                                <h5 class="card-title">Knowledge Text</h5>
+                                <p class="card-text">Enter the text you want to add to the knowledge system.</p>
+                                <textarea id="textInput" class="form-control" rows="6" placeholder="Enter knowledge text here..."></textarea>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="tab-pane fade" id="file" role="tabpanel" aria-labelledby="file-tab">
+                        <div class="card">
+                            <div class="card-body">
+                                <h5 class="card-title">Upload File</h5>
+                                <p class="card-text">Upload a text file (.txt, .md, .csv, etc.) to add to the knowledge system.</p>
+                                
+                                <div class="mb-3">
+                                    <input class="form-control" type="file" id="fileInput" accept=".txt,.md,.csv,.json,.xml,.html">
+                                </div>
+                                
+                                <div id="filePreview"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="card mt-4">
+                    <div class="card-body">
+                        <h5 class="card-title">Critical Entities</h5>
+                        <p class="card-text">Specify important entities, concepts, or terms that should be preserved during compression.</p>
+                        
+                        <div class="input-group mb-3">
+                            <input type="text" id="entityInput" class="form-control" placeholder="Add an entity...">
+                            <button class="btn btn-outline-secondary" type="button" id="addEntityBtn">Add</button>
+                            <button class="btn btn-outline-secondary" type="button" id="extractEntitiesBtn">Extract Entities</button>
+                        </div>
+                        
+                        <div id="entityContainer"></div>
+                    </div>
+                </div>
+                
+                <div class="d-flex justify-content-between mt-3">
+                    <button type="button" class="btn btn-outline-secondary" id="resetBtn">Reset</button>
+                    <button type="button" class="btn btn-primary" id="submitBtn">Add Knowledge</button>
+                </div>
+                
+                <div class="alert alert-success" id="successAlert" role="alert"></div>
+                <div class="alert alert-danger" id="errorAlert" role="alert"></div>
+                
+                <div id="resultContainer" class="card">
+                    <div class="card-body">
+                        <h5 class="card-title text-success">Knowledge Added Successfully</h5>
+                        <p><strong>Context ID:</strong> <span id="contextId"></span></p>
+                        <hr>
+                        <p class="text-muted">You can now query this knowledge or view it in the knowledge graph.</p>
+                        <button type="button" class="btn btn-outline-primary" id="addMoreBtn">Add More Knowledge</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // DOM Elements
+        const textInput = document.getElementById('textInput');
+        const fileInput = document.getElementById('fileInput');
+        const filePreview = document.getElementById('filePreview');
+        const entityInput = document.getElementById('entityInput');
+        const addEntityBtn = document.getElementById('addEntityBtn');
+        const extractEntitiesBtn = document.getElementById('extractEntitiesBtn');
+        const entityContainer = document.getElementById('entityContainer');
+        const resetBtn = document.getElementById('resetBtn');
+        const submitBtn = document.getElementById('submitBtn');
+        const successAlert = document.getElementById('successAlert');
+        const errorAlert = document.getElementById('errorAlert');
+        const resultContainer = document.getElementById('resultContainer');
+        const contextId = document.getElementById('contextId');
+        const addMoreBtn = document.getElementById('addMoreBtn');
+        const inputTabs = document.getElementById('inputTabs');
+
+        // State
+        let currentMode = 'text';
+        let fileContent = '';
+        let entities = [];
+
+        // Initialize
+        inputTabs.addEventListener('shown.bs.tab', function (event) {
+            currentMode = event.target.id.split('-')[0];
+        });
+
+        // File input change
+        fileInput.addEventListener('change', function () {
+            const file = this.files[0];
+            if (!file) {
+                filePreview.style.display = 'none';
+                fileContent = '';
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = function (e) {
+                fileContent = e.target.result;
+                const preview = fileContent.slice(0, 1000) + (fileContent.length > 1000 ? '...' : '');
+                filePreview.textContent = preview;
+                filePreview.style.display = 'block';
+            };
+            reader.readAsText(file);
+        });
+
+        // Add entity
+        addEntityBtn.addEventListener('click', function () {
+            addEntity();
+        });
+
+        // Add entity on enter
+        entityInput.addEventListener('keypress', function (e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                addEntity();
+            }
+        });
+
+        // Extract entities
+        extractEntitiesBtn.addEventListener('click', function () {
+            const text = currentMode === 'text' ? textInput.value : fileContent;
+            
+            if (!text) {
+                showError('No text to extract entities from');
+                return;
+            }
+
+            // Simple entity extraction (in a real scenario, we'd call the API)
+            const words = text.toLowerCase().match(/\b[a-z][a-z0-9]{3,}\b/g) || [];
+            const wordCounts = {};
+            
+            const stopwords = new Set([
+                'a', 'an', 'the', 'and', 'or', 'but', 'if', 'then', 'else', 'when',
+                'at', 'by', 'for', 'with', 'about', 'against', 'between', 'into',
+                'through', 'during', 'before', 'after', 'above', 'below', 'from',
+                'up', 'down', 'in', 'out', 'on', 'off', 'over', 'under', 'again',
+                'further', 'then', 'once', 'here', 'there', 'when', 'where', 'why',
+                'how', 'all', 'any', 'both', 'each', 'few', 'more', 'most', 'other',
+                'some', 'such', 'no', 'nor', 'not', 'only', 'own', 'same', 'so',
+                'than', 'too', 'very', 'can', 'will', 'just', 'don', 'should',
+                'now', 'to', 'of', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+                'have', 'has', 'had', 'having', 'do', 'does', 'did', 'doing', 'this',
+                'that', 'these', 'those', 'am', 'it', 'its', 'they', 'them', 'their',
+                'what', 'which', 'who', 'whom'
+            ]);
+            
+            words.forEach(word => {
+                if (!stopwords.has(word)) {
+                    wordCounts[word] = (wordCounts[word] || 0) + 1;
+                }
+            });
+            
+            const sortedWords = Object.entries(wordCounts)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 10)
+                .map(pair => pair[0]);
+            
+            // Add to existing entities
+            for (const word of sortedWords) {
+                if (!entities.includes(word)) {
+                    entities.push(word);
+                    renderEntities();
+                }
+            }
+            
+            showSuccess('Entities extracted successfully');
+        });
+
+        // Submit form
+        submitBtn.addEventListener('click', async function () {
+            try {
+                // Get the content based on current mode
+                const content = currentMode === 'text' ? textInput.value : fileContent;
+                
+                if (!content) {
+                    showError(currentMode === 'text' ? 'Please enter some text' : 'Please select a file');
+                    return;
+                }
+                
+                let response;
+                
+                if (currentMode === 'text') {
+                    // Submit via JSON API
+                    response = await fetch('/api/add_knowledge', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            text: content,
+                            critical_entities: entities,
+                            source: 'manual_input'
+                        })
+                    });
+                } else {
+                    // Submit via FormData API
+                    const formData = new FormData();
+                    formData.append('file', fileInput.files[0]);
+                    formData.append('entities', entities.join(','));
+                    
+                    response = await fetch('/api/upload_file', {
+                        method: 'POST',
+                        body: formData
+                    });
+                }
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    // Show success and result
+                    contextId.textContent = data.context_id;
+                    resultContainer.style.display = 'block';
+                    showSuccess(data.message);
+                    
+                    // Update entities if extracted automatically
+                    if (data.entities_extracted && data.entities_extracted.length > 0) {
+                        entities = data.entities_extracted;
+                        renderEntities();
+                    }
+                } else {
+                    showError(data.message || 'Failed to add knowledge');
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                showError('An error occurred while adding knowledge');
+            }
+        });
+
+        // Reset form
+        resetBtn.addEventListener('click', function () {
+            textInput.value = '';
+            fileInput.value = '';
+            filePreview.style.display = 'none';
+            fileContent = '';
+            entityInput.value = '';
+            entities = [];
+            renderEntities();
+            resultContainer.style.display = 'none';
+            hideAlerts();
+        });
+
+        // Add more knowledge
+        addMoreBtn.addEventListener('click', function () {
+            resetBtn.click();
+        });
+
+        // Helper functions
+        function addEntity() {
+            const value = entityInput.value.trim();
+            if (value && !entities.includes(value)) {
+                entities.push(value);
+                entityInput.value = '';
+                renderEntities();
+            }
+        }
+
+        function renderEntities() {
+            entityContainer.innerHTML = '';
+            if (entities.length === 0) {
+                entityContainer.innerHTML = '<p class="text-muted">No entities added. The system will identify important entities automatically.</p>';
+                return;
+            }
+            
+            for (const entity of entities) {
+                const chip = document.createElement('span');
+                chip.className = 'chip';
+                chip.innerHTML = `${entity} <span class="close" data-entity="${entity}">&times;</span>`;
+                entityContainer.appendChild(chip);
+            }
+            
+            // Add click handlers for remove buttons
+            document.querySelectorAll('.chip .close').forEach(btn => {
+                btn.addEventListener('click', function () {
+                    const entityToRemove = this.getAttribute('data-entity');
+                    entities = entities.filter(e => e !== entityToRemove);
+                    renderEntities();
+                });
+            });
+        }
+
+        function showSuccess(message) {
+            successAlert.textContent = message;
+            successAlert.style.display = 'block';
+            errorAlert.style.display = 'none';
+            // Auto-hide after 5 seconds
+            setTimeout(() => {
+                successAlert.style.display = 'none';
+            }, 5000);
+        }
+
+        function showError(message) {
+            errorAlert.textContent = message;
+            errorAlert.style.display = 'block';
+            successAlert.style.display = 'none';
+        }
+
+        function hideAlerts() {
+            successAlert.style.display = 'none';
+            errorAlert.style.display = 'none';
+        }
+
+        // Initialize entities
+        renderEntities();
+    </script>
+</body>
+</html>

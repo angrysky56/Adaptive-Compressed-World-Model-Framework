@@ -1,342 +1,361 @@
 """
-Adaptive Compressed Knowledge Representation System
+Adaptive Knowledge System
 
-This system implements the core components of an adaptive, compressed world model
-framework focused on efficient knowledge representation and retrieval.
-
-Key components:
-1. CompressedContextPack - Handles efficient storage of knowledge chunks
-2. DynamicContextGraph - Manages relationships between context packs
-3. EventTriggerSystem - Controls when updates and expansions occur
-4. StorageHierarchy - Manages caching and long-term storage
+This module integrates the CompressedContextPack, EventTriggerSystem, and DynamicContextGraph
+components to provide a complete adaptive, compressed knowledge representation system.
 """
 
-import networkx as nx
-import redis
 import asyncio
-import numpy as np
-import uuid
-from transformers import AutoTokenizer, AutoModel
-import torch
-from typing import Dict, List, Any, Optional, Tuple
-import json
 import time
+import uuid
+import os
+from typing import Dict, List, Any, Optional, Tuple, Set
+import json
+import numpy as np
 
-class CompressedContextPack:
-    """Handles the compression and expansion of knowledge contexts"""
-    
-    def __init__(self, model_name: str = "sentence-transformers/all-MiniLM-L6-v2"):
-        """Initialize with a sentence transformer model for embedding generation"""
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModel.from_pretrained(model_name)
-        self.critical_entities = []
-        
-    def compress(self, text: str, critical_entities: List[str] = None) -> Dict:
-        """
-        Compress text into a dense representation
-        
-        Args:
-            text: The raw text to compress
-            critical_entities: Important entities that should be preserved
-            
-        Returns:
-            A dictionary containing compressed data and metadata
-        """
-        # Store critical entities
-        if critical_entities:
-            self.critical_entities = critical_entities
-            
-        # Create embedding for the entire text
-        inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
-        with torch.no_grad():
-            outputs = self.model(**inputs)
-        
-        # Use mean pooling to get a fixed-size representation
-        embedding = outputs.last_hidden_state.mean(dim=1).squeeze().numpy()
-        
-        # Create a summary using chain of density approach
-        summary = self._generate_summary(text)
-        
-        # Create the compressed context pack
-        compressed_pack = {
-            "id": str(uuid.uuid4()),
-            "embedding": embedding.tolist(),
-            "summary": summary,
-            "critical_entities": self.critical_entities,
-            "creation_time": time.time(),
-            "last_accessed": time.time(),
-            "access_count": 0
-        }
-        
-        return compressed_pack
-    
-    def _generate_summary(self, text: str) -> str:
-        """
-        Generate a concise summary of the text
-        Implementation would use a summarization model or chain of density technique
-        
-        For now, we'll use a simple placeholder implementation
-        """
-        # In a real implementation, we would use a transformer model for summarization
-        # or implement Chain of Density technique
-        words = text.split()
-        if len(words) > 100:
-            summary = " ".join(words[:100]) + "..."
-        else:
-            summary = text
-            
-        # Ensure critical entities are represented in the summary
-        for entity in self.critical_entities:
-            if entity not in summary and entity in text:
-                summary += f" [Critical: {entity}]"
-                
-        return summary
-    
-    def expand(self, compressed_pack: Dict) -> str:
-        """
-        Expand a compressed context pack into its detailed form
-        In a real system, this might retrieve the full content from storage
-        
-        For now, this is a placeholder implementation
-        """
-        # In a real implementation, we would rebuild or retrieve the original content
-        # For now, we'll just return the summary
-        return compressed_pack["summary"]
-
-
-class DynamicContextGraph:
-    """Manages the relationships and links between context packs"""
-    
-    def __init__(self):
-        """Initialize the graph structure for context relationships"""
-        self.graph = nx.Graph()
-        
-    def add_context(self, context_pack: Dict) -> None:
-        """Add a new context pack to the graph"""
-        self.graph.add_node(context_pack["id"], **context_pack)
-        
-    def link_contexts(self, context_id1: str, context_id2: str, relevance_score: float) -> None:
-        """Link two context packs with a relevance score"""
-        if not self.graph.has_edge(context_id1, context_id2):
-            self.graph.add_edge(context_id1, context_id2, weight=relevance_score)
-        else:
-            # Update existing edge with new relevance score
-            self.graph[context_id1][context_id2]["weight"] = relevance_score
-    
-    def calculate_relevance(self, context_id1: str, context_id2: str) -> float:
-        """Calculate relevance between two contexts based on embedding similarity"""
-        if not self.graph.has_node(context_id1) or not self.graph.has_node(context_id2):
-            return 0.0
-            
-        embedding1 = np.array(self.graph.nodes[context_id1]["embedding"])
-        embedding2 = np.array(self.graph.nodes[context_id2]["embedding"])
-        
-        # Calculate cosine similarity
-        similarity = np.dot(embedding1, embedding2) / (np.linalg.norm(embedding1) * np.linalg.norm(embedding2))
-        return float(similarity)
-    
-    def get_related_contexts(self, context_id: str, threshold: float = 0.7) -> List[str]:
-        """Get related contexts based on graph connections and threshold"""
-        if not self.graph.has_node(context_id):
-            return []
-            
-        related_contexts = []
-        
-        # First, get direct neighbors
-        neighbors = list(self.graph.neighbors(context_id))
-        for neighbor in neighbors:
-            if self.graph[context_id][neighbor]["weight"] >= threshold:
-                related_contexts.append(neighbor)
-                
-        return related_contexts
-    
-    def expand_subgraph(self, context_ids: List[str], max_depth: int = 2) -> nx.Graph:
-        """Return a subgraph containing the specified contexts and their neighbors up to max_depth"""
-        if not context_ids:
-            return nx.Graph()
-            
-        # Create a set to track the nodes to include
-        nodes_to_include = set(context_ids)
-        
-        # Add neighbors up to max_depth
-        current_nodes = set(context_ids)
-        for _ in range(max_depth):
-            new_nodes = set()
-            for node in current_nodes:
-                if self.graph.has_node(node):
-                    neighbors = set(self.graph.neighbors(node))
-                    new_nodes.update(neighbors)
-            nodes_to_include.update(new_nodes)
-            current_nodes = new_nodes
-            
-        # Create the subgraph
-        return self.graph.subgraph(nodes_to_include)
-
-
-class EventTriggerSystem:
-    """Controls when updates and expansions of the knowledge model occur"""
-    
-    def __init__(self, initial_threshold: float = 0.5, adaptation_rate: float = 0.05):
-        """Initialize the event trigger system with threshold parameters"""
-        self.thresholds = {}  # Context-specific thresholds
-        self.default_threshold = initial_threshold
-        self.adaptation_rate = adaptation_rate
-        self.event_history = []
-        
-    def set_threshold(self, context_id: str, threshold: float) -> None:
-        """Set a specific threshold for a context"""
-        self.thresholds[context_id] = threshold
-        
-    def get_threshold(self, context_id: str) -> float:
-        """Get the threshold for a specific context or return the default"""
-        return self.thresholds.get(context_id, self.default_threshold)
-    
-    def should_trigger_update(self, context_id: str, change_magnitude: float) -> bool:
-        """Determine if an update should be triggered based on threshold"""
-        threshold = self.get_threshold(context_id)
-        return change_magnitude > threshold
-    
-    def record_event(self, context_id: str, change_magnitude: float, was_triggered: bool) -> None:
-        """Record an event to adapt thresholds over time"""
-        self.event_history.append({
-            "context_id": context_id,
-            "change_magnitude": change_magnitude,
-            "was_triggered": was_triggered,
-            "timestamp": time.time()
-        })
-        
-        # Adapt threshold based on recent history
-        self._adapt_threshold(context_id)
-    
-    def _adapt_threshold(self, context_id: str) -> None:
-        """Adapt the threshold based on recent event history"""
-        # Get recent events for this context
-        recent_events = [e for e in self.event_history[-50:] if e["context_id"] == context_id]
-        
-        if len(recent_events) < 10:
-            return  # Not enough data to adapt
-            
-        # Calculate the average change magnitude
-        avg_magnitude = sum(e["change_magnitude"] for e in recent_events) / len(recent_events)
-        
-        # Adjust threshold to be slightly below the average magnitude
-        # to trigger on significant changes but avoid constant triggering
-        current_threshold = self.get_threshold(context_id)
-        new_threshold = current_threshold + self.adaptation_rate * (avg_magnitude * 0.8 - current_threshold)
-        
-        # Update the threshold
-        self.set_threshold(context_id, new_threshold)
+# Import components
+from .context_pack import CompressedContextPack
+from .event_trigger import EventTriggerSystem
+from .context_graph import DynamicContextGraph
 
 
 class StorageHierarchy:
-    """Manages the hierarchical storage of context packs"""
+    """
+    Manages the hierarchical storage of context packs.
     
-    def __init__(self, redis_host: str = "localhost", redis_port: int = 6379, db: int = 0):
-        """Initialize the storage hierarchy with Redis for caching"""
-        self.cache = redis.Redis(host=redis_host, port=redis_port, db=db)
-        self.long_term_storage = {}  # Placeholder for actual long-term storage
+    Implements a caching system for frequently accessed contexts and manages
+    long-term storage for less frequently used data.
+    """
+    
+    def __init__(self, cache_size: int = 100, cache_expiry: int = 3600,
+                 storage_dir: str = None):
+        """
+        Initialize the storage hierarchy.
         
-    def store(self, context_pack: Dict) -> None:
-        """Store a context pack in the appropriate storage tier"""
+        Args:
+            cache_size: Maximum number of items to keep in the cache
+            cache_expiry: Time in seconds before cached items expire
+            storage_dir: Directory for long-term storage (None for in-memory only)
+        """
+        self.cache = {}  # In-memory cache
+        self.cache_size = cache_size
+        self.cache_expiry = cache_expiry
+        self.storage_dir = storage_dir
+        self.long_term_storage = {}  # In-memory backup for long-term storage
+        
+        # Create storage directory if specified and doesn't exist
+        if storage_dir and not os.path.exists(storage_dir):
+            try:
+                os.makedirs(storage_dir)
+            except Exception as e:
+                print(f"Error creating storage directory: {e}")
+                self.storage_dir = None
+    
+    async def store(self, context_pack: Dict) -> None:
+        """
+        Store a context pack in the appropriate storage tier.
+        
+        Args:
+            context_pack: The context pack to store
+        """
         context_id = context_pack["id"]
         
-        # Store in cache for quick access
-        self.cache.set(f"context:{context_id}", json.dumps(context_pack), ex=3600)  # 1 hour expiry
+        # Store in cache
+        self.cache[context_id] = {
+            "data": context_pack,
+            "expiry": time.time() + self.cache_expiry
+        }
+        
+        # Prune cache if it exceeds the size limit
+        if len(self.cache) > self.cache_size:
+            self._prune_cache()
         
         # Store in long-term storage
         self.long_term_storage[context_id] = context_pack
+        
+        # Write to file storage if configured
+        if self.storage_dir:
+            asyncio.create_task(self._write_to_file(context_id, context_pack))
     
     async def retrieve(self, context_id: str) -> Optional[Dict]:
-        """Retrieve a context pack, preferring cache if available"""
-        # Try to get from cache first
-        cached_data = self.cache.get(f"context:{context_id}")
+        """
+        Retrieve a context pack, preferring cache if available.
         
-        if cached_data:
-            context_pack = json.loads(cached_data)
-            # Update access metadata
-            context_pack["last_accessed"] = time.time()
-            context_pack["access_count"] += 1
-            # Refresh cache
-            self.cache.set(f"context:{context_id}", json.dumps(context_pack), ex=3600)
-            return context_pack
+        Args:
+            context_id: ID of the context pack to retrieve
             
-        # If not in cache, try long-term storage
+        Returns:
+            The context pack, or None if not found
+        """
+        # Try to get from cache first
+        if context_id in self.cache:
+            cache_entry = self.cache[context_id]
+            
+            # Check if the entry has expired
+            if time.time() < cache_entry["expiry"]:
+                # Update expiry time
+                self.cache[context_id]["expiry"] = time.time() + self.cache_expiry
+                
+                # Update access metadata
+                context_pack = cache_entry["data"]
+                context_pack["last_accessed"] = time.time()
+                context_pack["access_count"] = context_pack.get("access_count", 0) + 1
+                
+                return context_pack
+            
+            # Entry has expired, remove from cache
+            del self.cache[context_id]
+        
+        # Try in-memory long-term storage
         if context_id in self.long_term_storage:
             context_pack = self.long_term_storage[context_id]
+            
             # Update access metadata
             context_pack["last_accessed"] = time.time()
-            context_pack["access_count"] += 1
-            # Add to cache for future quick access
-            self.cache.set(f"context:{context_id}", json.dumps(context_pack), ex=3600)
-            return context_pack
+            context_pack["access_count"] = context_pack.get("access_count", 0) + 1
             
+            # Add to cache for future quick access
+            self.cache[context_id] = {
+                "data": context_pack,
+                "expiry": time.time() + self.cache_expiry
+            }
+            
+            return context_pack
+        
+        # Try file storage if configured
+        if self.storage_dir:
+            context_pack = await self._read_from_file(context_id)
+            if context_pack:
+                # Update in-memory storage
+                self.long_term_storage[context_id] = context_pack
+                
+                # Add to cache
+                self.cache[context_id] = {
+                    "data": context_pack,
+                    "expiry": time.time() + self.cache_expiry
+                }
+                
+                return context_pack
+        
+        # Not found
         return None
     
-    def prune_storage(self, max_age_days: int = 30, min_access_count: int = 5) -> None:
-        """Remove old or rarely accessed context packs from long-term storage"""
+    def _prune_cache(self) -> None:
+        """Prune the cache by removing expired or least recently used items."""
+        current_time = time.time()
+        
+        # First, remove expired entries
+        expired_keys = [k for k, v in self.cache.items() if current_time > v["expiry"]]
+        for key in expired_keys:
+            del self.cache[key]
+            
+        # If still over capacity, remove oldest entries
+        if len(self.cache) > self.cache_size:
+            # Sort by expiry time (oldest first)
+            sorted_entries = sorted(self.cache.items(), key=lambda x: x[1]["expiry"])
+            
+            # Remove oldest entries
+            for key, _ in sorted_entries[:len(self.cache) - self.cache_size]:
+                del self.cache[key]
+    
+    async def prune_storage(self, max_age_days: int = 30, min_access_count: int = 5) -> List[str]:
+        """
+        Remove old or rarely accessed context packs from storage.
+        
+        Args:
+            max_age_days: Maximum age in days to keep unused contexts
+            min_access_count: Minimum access count to keep old contexts
+            
+        Returns:
+            List of context IDs that were removed
+        """
         current_time = time.time()
         max_age_seconds = max_age_days * 24 * 60 * 60
         
         contexts_to_remove = []
         
+        # Identify contexts to remove
         for context_id, context_pack in self.long_term_storage.items():
-            age = current_time - context_pack["creation_time"]
-            access_count = context_pack["access_count"]
+            # Calculate age
+            creation_time = context_pack.get("creation_time", 0)
+            age = current_time - creation_time
             
+            # Get access count
+            access_count = context_pack.get("access_count", 0)
+            
+            # Check if it should be removed
             if age > max_age_seconds and access_count < min_access_count:
                 contexts_to_remove.append(context_id)
-                
-        # Remove the identified contexts
+        
+        # Remove identified contexts
         for context_id in contexts_to_remove:
+            # Remove from long-term storage
             del self.long_term_storage[context_id]
+            
+            # Remove from cache if present
+            if context_id in self.cache:
+                del self.cache[context_id]
+                
+            # Remove from file storage
+            if self.storage_dir:
+                file_path = os.path.join(self.storage_dir, f"{context_id}.json")
+                if os.path.exists(file_path):
+                    try:
+                        os.remove(file_path)
+                    except Exception as e:
+                        print(f"Error removing {file_path}: {e}")
+        
+        return contexts_to_remove
+    
+    async def _write_to_file(self, context_id: str, context_pack: Dict) -> bool:
+        """
+        Write a context pack to file storage.
+        
+        Args:
+            context_id: ID of the context pack
+            context_pack: The context pack to write
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.storage_dir:
+            return False
+            
+        file_path = os.path.join(self.storage_dir, f"{context_id}.json")
+        
+        try:
+            with open(file_path, 'w') as f:
+                json.dump(context_pack, f, indent=2)
+            return True
+        except Exception as e:
+            print(f"Error writing context pack to {file_path}: {e}")
+            return False
+    
+    async def _read_from_file(self, context_id: str) -> Optional[Dict]:
+        """
+        Read a context pack from file storage.
+        
+        Args:
+            context_id: ID of the context pack
+            
+        Returns:
+            The context pack, or None if not found or error
+        """
+        if not self.storage_dir:
+            return None
+            
+        file_path = os.path.join(self.storage_dir, f"{context_id}.json")
+        
+        if not os.path.exists(file_path):
+            return None
+            
+        try:
+            with open(file_path, 'r') as f:
+                context_pack = json.load(f)
+            return context_pack
+        except Exception as e:
+            print(f"Error reading context pack from {file_path}: {e}")
+            return None
 
 
 class AdaptiveKnowledgeSystem:
-    """Main class integrating all components of the knowledge representation system"""
+    """
+    Main class integrating all components of the knowledge representation system.
     
-    def __init__(self, model_name: str = "sentence-transformers/all-MiniLM-L6-v2"):
-        """Initialize the complete knowledge system"""
-        self.compressor = CompressedContextPack(model_name)
-        self.context_graph = DynamicContextGraph()
-        self.event_trigger = EventTriggerSystem()
-        self.storage = StorageHierarchy()
+    The AdaptiveKnowledgeSystem provides a complete solution for managing compressed
+    knowledge representations, with event-triggered updates and dynamic context linking.
+    """
+    
+    def __init__(self, model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
+                 storage_dir: str = None, use_llm: bool = False, ollama_model: str = None):
+        """
+        Initialize the complete knowledge system.
         
-    async def add_knowledge(self, text: str, critical_entities: List[str] = None) -> str:
-        """Add new knowledge to the system, returning the context ID"""
+        Args:
+            model_name: The name of the sentence transformer model to use
+            storage_dir: Directory for long-term storage (None for in-memory only)
+            use_llm: Whether to use LLM for enhanced relationship analysis
+            ollama_model: Specific Ollama model to use for LLM analysis
+        """
+        self.compressor = CompressedContextPack(model_name)
+        self.context_graph = DynamicContextGraph(use_llm=use_llm, ollama_model=ollama_model)
+        self.event_trigger = EventTriggerSystem()
+        self.storage = StorageHierarchy(storage_dir=storage_dir)
+        self.use_llm = use_llm
+        
+    async def add_knowledge(self, text: str, critical_entities: List[str] = None, metadata: Dict = None) -> str:
+        """
+        Add new knowledge to the system.
+        
+        Args:
+            text: The knowledge text to add
+            critical_entities: Important entities that should be preserved
+            metadata: Additional metadata about the context (e.g., source, file type)
+            
+        Returns:
+            The ID of the added context
+        """
         # Compress the knowledge
         context_pack = self.compressor.compress(text, critical_entities)
+        
+        # Add metadata if provided
+        if metadata:
+            context_pack.update({
+                "metadata": metadata,
+                "source": metadata.get("source", "unknown")
+            })
         
         # Add to the context graph
         self.context_graph.add_context(context_pack)
         
         # Calculate relevance and link to related contexts
-        for node in self.context_graph.graph.nodes:
+        for node in list(self.context_graph.graph.nodes()):
             if node != context_pack["id"]:
                 relevance = self.context_graph.calculate_relevance(node, context_pack["id"])
                 if relevance > 0.5:  # Only link if sufficiently relevant
                     self.context_graph.link_contexts(node, context_pack["id"], relevance)
         
         # Store the context pack
-        self.storage.store(context_pack)
+        await self.storage.store(context_pack)
         
         return context_pack["id"]
     
-    async def query_knowledge(self, query_text: str, max_results: int = 5) -> List[Dict]:
-        """Query the knowledge system based on a text query"""
-        # Create an embedding for the query
+    async def query_knowledge(self, query_text: str, max_results: int = 5, 
+                            include_explanations: bool = False) -> List[Dict]:
+        """
+        Query the knowledge system based on a text query.
+        
+        Args:
+            query_text: The query text
+            max_results: Maximum number of results to return
+            include_explanations: Whether to include LLM-generated explanations
+            
+        Returns:
+            List of context packs matching the query
+        """
+        # Create a temporary context pack for the query
         query_pack = self.compressor.compress(query_text)
         
-        # Find relevant contexts
+        # Calculate relevance to all contexts in the graph
         relevance_scores = {}
         
-        for node in self.context_graph.graph.nodes:
-            context_data = self.context_graph.graph.nodes[node]
-            if "embedding" in context_data:
-                embedding = np.array(context_data["embedding"])
-                query_embedding = np.array(query_pack["embedding"])
+        for node in self.context_graph.graph.nodes():
+            node_data = self.context_graph.graph.nodes[node]
+            
+            # Skip if missing required data
+            if "embedding" not in node_data:
+                continue
                 
-                # Calculate similarity
-                similarity = np.dot(embedding, query_embedding) / (np.linalg.norm(embedding) * np.linalg.norm(query_embedding))
+            # Calculate similarity
+            embedding = np.array(node_data["embedding"])
+            query_embedding = np.array(query_pack["embedding"])
+            
+            # Normalize embeddings
+            embedding_norm = np.linalg.norm(embedding)
+            query_norm = np.linalg.norm(query_embedding)
+            
+            if embedding_norm > 0 and query_norm > 0:
+                similarity = np.dot(embedding, query_embedding) / (embedding_norm * query_norm)
                 relevance_scores[node] = float(similarity)
         
         # Sort by relevance
@@ -348,13 +367,22 @@ class AdaptiveKnowledgeSystem:
             context_pack = await self.storage.retrieve(context_id)
             if context_pack:
                 # Add the relevance score
+                context_pack = context_pack.copy()
                 context_pack["relevance_score"] = score
                 results.append(context_pack)
         
         return results
     
     async def expand_knowledge(self, context_id: str) -> Dict:
-        """Expand a compressed context into its detailed form"""
+        """
+        Expand a compressed context into its detailed form.
+        
+        Args:
+            context_id: ID of the context to expand
+            
+        Returns:
+            Expanded knowledge with related contexts
+        """
         # Retrieve the context pack
         context_pack = await self.storage.retrieve(context_id)
         
@@ -362,7 +390,7 @@ class AdaptiveKnowledgeSystem:
             return {"error": "Context not found"}
             
         # Expand the context
-        expanded_text = self.compressor.expand(context_pack)
+        expanded = self.compressor.expand(context_pack)
         
         # Get related contexts
         related_context_ids = self.context_graph.get_related_contexts(context_id)
@@ -371,93 +399,303 @@ class AdaptiveKnowledgeSystem:
         for related_id in related_context_ids:
             related_pack = await self.storage.retrieve(related_id)
             if related_pack:
+                # Get the edge data for relevance score
+                if self.context_graph.graph.has_edge(context_id, related_id):
+                    relevance = self.context_graph.graph[context_id][related_id]["weight"]
+                else:
+                    relevance = self.context_graph.calculate_relevance(context_id, related_id)
+                    
                 related_contexts.append({
                     "id": related_id,
-                    "summary": related_pack["summary"],
-                    "relevance": self.context_graph.graph[context_id][related_id]["weight"]
+                    "summary": related_pack.get("summary", "No summary available"),
+                    "relevance": relevance
                 })
         
-        # Return the expanded knowledge with related contexts
-        return {
-            "id": context_id,
-            "expanded_content": expanded_text,
-            "related_contexts": related_contexts
-        }
+        # Add related contexts to the expanded result
+        expanded["related_contexts"] = related_contexts
+        
+        return expanded
     
     async def update_knowledge(self, context_id: str, new_text: str) -> bool:
-        """Update existing knowledge when a significant change is detected"""
+        """
+        Update existing knowledge when a significant change is detected.
+        
+        Args:
+            context_id: ID of the context to update
+            new_text: New text to update with
+            
+        Returns:
+            True if the update was performed, False otherwise
+        """
         # Retrieve the existing context
         existing_context = await self.storage.retrieve(context_id)
         
         if not existing_context:
             return False
             
-        # Create a temporary compression of the new text
-        new_context = self.compressor.compress(new_text, existing_context.get("critical_entities", []))
+        # Get critical entities from existing context
+        critical_entities = existing_context.get("critical_entities", [])
         
-        # Calculate the change magnitude (using embedding distance)
-        existing_embedding = np.array(existing_context["embedding"])
-        new_embedding = np.array(new_context["embedding"])
+        # Detect if the change is significant
+        change_magnitude, is_significant = self.compressor.detect_significant_change(
+            existing_context, new_text
+        )
         
-        change_magnitude = np.linalg.norm(existing_embedding - new_embedding)
+        # Record the event for threshold adaptation
+        self.event_trigger.record_event(
+            context_id,
+            change_magnitude,
+            is_significant
+        )
         
         # Check if update should be triggered
         should_update = self.event_trigger.should_trigger_update(context_id, change_magnitude)
         
-        # Record the event for threshold adaptation
-        self.event_trigger.record_event(context_id, change_magnitude, should_update)
-        
         if should_update:
+            # Create a new compressed pack with the updated text
+            new_context = self.compressor.compress(new_text, critical_entities)
+            
             # Preserve the original ID and metadata
             new_context["id"] = context_id
-            new_context["creation_time"] = existing_context["creation_time"]
-            new_context["access_count"] = existing_context["access_count"]
+            new_context["creation_time"] = existing_context.get("creation_time", time.time())
+            new_context["access_count"] = existing_context.get("access_count", 0)
+            new_context["version"] = existing_context.get("version", 0) + 1
             
             # Update the graph and storage
-            self.context_graph.graph.nodes[context_id].update(new_context)
-            self.storage.store(new_context)
+            self.context_graph.add_context(new_context)
+            await self.storage.store(new_context)
             
             # Update relationships
-            for node in self.context_graph.graph.nodes:
+            for node in self.context_graph.graph.nodes():
                 if node != context_id:
                     relevance = self.context_graph.calculate_relevance(node, context_id)
-                    self.context_graph.link_contexts(node, context_id, relevance)
-                    
+                    if relevance > 0.5:  # Only link if sufficiently relevant
+                        self.context_graph.link_contexts(node, context_id, relevance)
+                        
             return True
         
         return False
-
-# Usage example
-async def main():
-    # Initialize the system
-    knowledge_system = AdaptiveKnowledgeSystem()
     
-    # Add some knowledge
-    context_id1 = await knowledge_system.add_knowledge(
-        "Artificial intelligence is the simulation of human intelligence by machines. "
-        "It includes machine learning, natural language processing, and computer vision.",
-        ["artificial intelligence", "machine learning", "natural language processing"]
-    )
+    async def remove_knowledge(self, context_id: str) -> bool:
+        """
+        Remove knowledge from the system.
+        
+        Args:
+            context_id: ID of the context to remove
+            
+        Returns:
+            True if the knowledge was removed, False otherwise
+        """
+        # Remove from context graph
+        removed_from_graph = self.context_graph.remove_context(context_id)
+        
+        # Remove from long-term storage
+        contexts_removed = await self.storage.prune_storage(
+            max_age_days=0,
+            min_access_count=float('inf')  # Force removal regardless of access count
+        )
+        
+        return removed_from_graph and context_id in contexts_removed
     
-    context_id2 = await knowledge_system.add_knowledge(
-        "Machine learning is a subset of AI that involves training algorithms on data. "
-        "Common techniques include neural networks, decision trees, and support vector machines.",
-        ["machine learning", "neural networks", "algorithms"]
-    )
+    async def search_knowledge(self, query_text: str, max_results: int = 10) -> List[Dict]:
+        """
+        Search for knowledge using more advanced criteria than simple queries.
+        
+        This method provides more options for filtering and sorting results.
+        
+        Args:
+            query_text: The query text
+            max_results: Maximum number of results to return
+            
+        Returns:
+            List of matching contexts with relevance scores
+        """
+        # For now, this is similar to query_knowledge but could be extended with more features
+        results = await self.query_knowledge(query_text, max_results)
+        return results
     
-    # Query the knowledge
-    results = await knowledge_system.query_knowledge("How does AI relate to neural networks?")
+    async def get_knowledge_history(self, context_id: str) -> List[Dict]:
+        """
+        Get the update history for a specific context.
+        
+        This would retrieve previous versions of the context if they are stored.
+        In a full implementation, this would access version history from storage.
+        
+        Args:
+            context_id: ID of the context to get history for
+            
+        Returns:
+            List of context versions in chronological order
+        """
+        # In a real implementation, this would retrieve version history
+        # For now, just return the current version
+        context = await self.storage.retrieve(context_id)
+        if not context:
+            return []
+            
+        return [context]
     
-    for i, result in enumerate(results):
-        print(f"Result {i+1} (Relevance: {result['relevance_score']:.2f}):")
-        print(f"Summary: {result['summary']}\n")
+    async def generate_knowledge_summary(self, context_ids: List[str] = None) -> Dict:
+        """
+        Generate a summary of the knowledge in the system.
+        
+        Args:
+            context_ids: Optional list of context IDs to summarize, or None for all
+            
+        Returns:
+            Summary information about the knowledge system
+        """
+        # If no context IDs provided, use all contexts
+        if context_ids is None:
+            context_ids = list(self.context_graph.graph.nodes())
+            
+        # Count total contexts
+        total_contexts = len(context_ids)
+        
+        # Get graph statistics
+        graph_stats = self.context_graph.get_graph_stats()
+        
+        # Calculate average context metrics
+        total_size = 0
+        total_compression_ratio = 0
+        total_access_count = 0
+        creation_times = []
+        
+        for context_id in context_ids:
+            context = await self.storage.retrieve(context_id)
+            if context:
+                total_size += context.get("compressed_length", 0)
+                total_compression_ratio += context.get("compression_ratio", 0)
+                total_access_count += context.get("access_count", 0)
+                creation_times.append(context.get("creation_time", 0))
+                
+        # Calculate averages
+        avg_size = total_size / max(1, total_contexts)
+        avg_compression_ratio = total_compression_ratio / max(1, total_contexts)
+        avg_access_count = total_access_count / max(1, total_contexts)
+        
+        # Get oldest and newest contexts
+        oldest_time = min(creation_times) if creation_times else 0
+        newest_time = max(creation_times) if creation_times else 0
+        
+        # Compile the summary
+        summary = {
+            "total_contexts": total_contexts,
+            "graph_stats": graph_stats,
+            "avg_context_size": avg_size,
+            "avg_compression_ratio": avg_compression_ratio,
+            "avg_access_count": avg_access_count,
+            "oldest_context_time": oldest_time,
+            "newest_context_time": newest_time
+        }
+        
+        return summary
     
-    # Expand a context
-    expanded = await knowledge_system.expand_knowledge(context_id1)
-    print(f"Expanded content: {expanded['expanded_content']}")
-    print("Related contexts:")
-    for related in expanded['related_contexts']:
-        print(f"- {related['summary']} (Relevance: {related['relevance']:.2f})")
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    async def export_knowledge_graph(self, filepath: str) -> bool:
+        """
+        Export the knowledge graph to a file.
+        
+        Args:
+            filepath: Path to the file to export to
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        return self.context_graph.save_to_json(filepath)
+    
+    async def import_knowledge_graph(self, filepath: str) -> bool:
+        """
+        Import a knowledge graph from a file.
+        
+        Args:
+            filepath: Path to the file to import from
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        return self.context_graph.load_from_json(filepath)
+    
+    async def enhance_knowledge_links(self, min_similarity: float = 0.6, max_suggestions: int = 10) -> List[Dict]:
+        """
+        Enhance knowledge connections using LLM analysis.
+        
+        This method uses language models to suggest potential connections between
+        contexts that might not be obvious through simple similarity measures.
+        
+        Args:
+            min_similarity: Minimum similarity threshold for suggested connections
+            max_suggestions: Maximum number of suggestions to return
+            
+        Returns:
+            List of dictionaries with information about suggested connections
+        """
+        if not self.use_llm:
+            return [{
+                "success": False,
+                "reason": "LLM analysis is not enabled"
+            }]
+            
+        # Use the DynamicContextGraph to enhance connections
+        suggested_links = self.context_graph.enhance_connections(
+            min_similarity=min_similarity,
+            max_suggestions=max_suggestions
+        )
+        
+        return suggested_links
+    
+    async def maintain_storage(self) -> Dict:
+        """
+        Perform maintenance on the storage system.
+        
+        This includes pruning old or rarely accessed contexts and optimizing storage.
+        
+        Returns:
+            Dictionary with maintenance results
+        """
+        # Prune storage
+        removed_contexts = await self.storage.prune_storage()
+        
+        # Get current storage stats
+        total_contexts = len(self.context_graph.graph.nodes())
+        cache_size = len(self.storage.cache)
+        long_term_size = len(self.storage.long_term_storage)
+        
+        # Compile results
+        results = {
+            "removed_contexts": len(removed_contexts),
+            "total_contexts_remaining": total_contexts,
+            "cache_size": cache_size,
+            "long_term_storage_size": long_term_size
+        }
+        
+        return results
+    
+    async def visualize_knowledge_graph(self, highlight_contexts: List[str] = None,
+                                       output_file: str = None) -> Optional[Any]:
+        """
+        Visualize the knowledge graph.
+        
+        Args:
+            highlight_contexts: Optional list of context IDs to highlight
+            output_file: Optional file to save the visualization to
+            
+        Returns:
+            Visualization object or None
+        """
+        # Use the DynamicContextGraph's visualize method
+        fig = self.context_graph.visualize(
+            highlight_nodes=highlight_contexts,
+            title="Knowledge Graph Visualization",
+            show=output_file is None
+        )
+        
+        # Save to file if requested
+        if fig and output_file:
+            try:
+                fig.savefig(output_file)
+                return True
+            except Exception as e:
+                print(f"Error saving visualization to {output_file}: {e}")
+                return False
+                
+        return fig

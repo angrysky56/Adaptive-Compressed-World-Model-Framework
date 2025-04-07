@@ -12,12 +12,10 @@ import random
 import os
 import sys
 
-# Add the parent directory to the Python path to import the package
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
-from src.knowledge.adaptive_knowledge_system import AdaptiveKnowledgeSystem
-from src.simulation.simulation_environment import SimulationEnvironment, Agent
-from src.monitoring.ioa_monitor import IoAMonitor
+# Import from our package
+from acwmf.knowledge.adaptive_knowledge_system import AdaptiveKnowledgeSystem
+from acwmf.simulation.simulation_environment import SimulationEnvironment, Agent
+from acwmf.monitoring.ioa_monitor import IoAMonitor
 
 
 async def run_basic_simulation(num_agents=5, num_resources=20, time_steps=50):
