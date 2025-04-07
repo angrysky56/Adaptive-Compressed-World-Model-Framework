@@ -31,6 +31,9 @@ The Adaptive Compressed World Model Framework provides an efficient, scalable, a
 Graph is still rough
 ![image](https://github.com/user-attachments/assets/a394d63e-744f-4305-a595-c853a234a828)
 
+![image](https://github.com/user-attachments/assets/c9a9d27c-6f7f-4f79-b933-af179b22c163)
+
+
 ## Repository Structure
 
 ```md
