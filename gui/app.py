@@ -20,20 +20,45 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 from src.knowledge import AdaptiveKnowledgeSystem, LLMContextLinker
 from src.knowledge.context_graph import DynamicContextGraph
 
-# Initialize the Flask app
-app = Flask(__name__, static_folder="frontend/build")
+# Initialize the Flask app - update static folder to point to Next.js build
+app = Flask(__name__, static_folder="nextjs-frontend/out")
 CORS(app)  # Enable Cross-Origin Resource Sharing
 
 # Define allowed upload file extensions
-ALLOWED_EXTENSIONS = {'txt', 'md', 'csv', 'json', 'xml', 'html'}
+ALLOWED_EXTENSIONS = {'txt', 'md', 'csv', 'json', 'xml', 'html', 'pdf', 'xlsx', 'xls', 'docx', 'doc'}
 
 def allowed_file(filename):
     """Check if the filename has an allowed extension"""
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+def get_file_type_handler(filename):
+    """Determine the appropriate handler for a file based on its extension"""
+    if not '.' in filename:
+        return 'text'  # Default to text handler
+    
+    ext = filename.rsplit('.', 1)[1].lower()
+    
+    # Map extensions to handler types
+    if ext in ['txt', 'md', 'json', 'xml', 'html', 'csv']:
+        return 'text'
+    elif ext in ['pdf']:
+        return 'pdf'
+    elif ext in ['docx', 'doc']:
+        return 'word'
+    elif ext in ['xlsx', 'xls']:
+        return 'excel'
+    else:
+        return 'text'  # Default to text handler
+
 # Initialize the knowledge system
 data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "knowledge_gui")
 os.makedirs(data_dir, exist_ok=True)
+
+# Set up logging
+import logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+logger.info(f"Data directory: {data_dir}")
 
 # Global knowledge system instance
 knowledge_system = None
@@ -181,13 +206,103 @@ def upload_file():
     
     # Process the file based on type
     try:
-        file_content = file.read().decode('utf-8')
+        # Determine the file type handler
+        file_type = get_file_type_handler(file.filename)
+        file_content = ""
         
-        if not file_content:
+        logger.info(f"Processing file: {file.filename} (type: {file_type})")
+        
+        # Handle different file types
+        if file_type == 'pdf':
+            try:
+                # Use our specialized PDF handler module
+                from pdf_handler import extract_text_from_pdf
+                
+                # Get the file data
+                file_data = file.read()
+                file.seek(0)  # Reset file position
+                
+                # Extract text using our robust handler
+                file_content, success = extract_text_from_pdf(file_data, file.filename)
+                
+                # Check if extraction was successful
+                if not success or not file_content.strip():
+                    logger.warning(f"PDF extraction failed for {file.filename}")
+                    return jsonify({
+                        "success": False,
+                        "message": "Could not extract text from PDF file. The file may be corrupted, password-protected, or contain only images."
+                    }), 400
+                
+                logger.info(f"Successfully extracted {len(file_content)} characters from PDF")
+                
+            except Exception as e:
+                logger.error(f"Error processing PDF: {str(e)}")
+                import traceback
+                logger.error(traceback.format_exc())
+                return jsonify({
+                    "success": False,
+                    "message": f"Error processing PDF file: {str(e)}"
+                }), 400
+        
+        elif file_type == 'word':
+            try:
+                # Save file to temporary location
+                import tempfile
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as temp_file:
+                    file.save(temp_file.name)
+                    temp_path = temp_file.name
+                
+                # Process Word documents
+                import docx
+                doc = docx.Document(temp_path)
+                file_content = "\n".join([paragraph.text for paragraph in doc.paragraphs])
+                
+                # Clean up
+                os.unlink(temp_path)
+                
+            except Exception as e:
+                logger.error(f"Error processing Word document: {str(e)}")
+                return jsonify({
+                    "success": False,
+                    "message": f"Error processing Word document: {str(e)}"
+                }), 400
+        
+        elif file_type == 'excel':
+            try:
+                # Save file to temp location
+                import tempfile
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as temp_file:
+                    file.save(temp_file.name)
+                    temp_path = temp_file.name
+                
+                # Process Excel files
+                import pandas as pd
+                df = pd.read_excel(temp_path)
+                file_content = df.to_string()
+                
+                # Clean up
+                os.unlink(temp_path)
+                
+            except Exception as e:
+                logger.error(f"Error processing Excel file: {str(e)}")
+                return jsonify({
+                    "success": False,
+                    "message": f"Error processing Excel file: {str(e)}"
+                }), 400
+        
+        else:
+            # Process text-based files
+            file_content = file.read().decode('utf-8')
+        
+        # Check if we extracted any content
+        if not file_content or file_content.strip() == "":
+            logger.warning(f"Failed to extract content from {file.filename}")
             return jsonify({
                 "success": False,
-                "message": "Empty file content"
+                "message": "Empty file content or failed to extract text from file"
             }), 400
+        
+        logger.info(f"Successfully extracted {len(file_content)} characters from {file.filename}")
         
         # Store source information
         metadata = {
@@ -573,18 +688,226 @@ def find_gaps():
         }), 500
 
 
-# Serve the React frontend
-@app.route('/', defaults={'path': ''})
-@app.route('/<path:path>')
-def serve(path):
-    if path != "" and os.path.exists(os.path.join(app.static_folder, path)):
-        return send_from_directory(app.static_folder, path)
-    else:
-        return send_from_directory(app.static_folder, 'index.html')
+@app.route('/api/delete_knowledge/<context_id>', methods=['DELETE'])
+def delete_knowledge(context_id):
+    """Delete knowledge context from the system"""
+    global knowledge_system
+    if knowledge_system is None:
+        return jsonify({
+            "success": False,
+            "message": "Knowledge system not initialized"
+        }), 400
+    
+    try:
+        # Check if context exists
+        if not knowledge_system.context_graph.graph.has_node(context_id):
+            return jsonify({
+                "success": False,
+                "message": f"Context ID {context_id} not found"
+            }), 404
+        
+        # Remove the context from the graph
+        knowledge_system.context_graph.remove_context(context_id)
+        
+        # Remove any associated files if applicable
+        context_file = os.path.join(data_dir, f"{context_id}.json")
+        if os.path.exists(context_file):
+            os.remove(context_file)
+        
+        return jsonify({
+            "success": True,
+            "message": f"Context {context_id} successfully deleted"
+        })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": f"Error deleting knowledge: {str(e)}"
+        }), 500
 
+
+@app.route('/api/get_all_contexts', methods=['GET'])
+def get_all_contexts():
+    """Get a list of all contexts in the system with their basic information"""
+    global knowledge_system
+    if knowledge_system is None:
+        return jsonify({
+            "success": False,
+            "message": "Knowledge system not initialized"
+        }), 400
+    
+    try:
+        # Check if data directory exists and is accessible
+        if not os.path.exists(data_dir):
+            os.makedirs(data_dir, exist_ok=True)
+            
+        print(f"Scanning data directory: {data_dir}")
+        
+        # Scan data directory for context files
+        context_files = []
+        for root, dirs, files in os.walk(data_dir):
+            for file in files:
+                if file.endswith('.json'):
+                    context_files.append(os.path.join(root, file))
+        
+        print(f"Found {len(context_files)} context files")
+        
+        # Extract basic information about all contexts
+        contexts = []
+        
+        # First try to get contexts from the graph
+        if hasattr(knowledge_system, 'context_graph') and knowledge_system.context_graph:
+            print(f"Extracting {len(knowledge_system.context_graph.graph.nodes)} nodes from graph")
+            for node_id, node_data in knowledge_system.context_graph.graph.nodes(data=True):
+                # Get file information if available
+                file_info = {}
+                context_file = os.path.join(data_dir, f"{node_id}.json")
+                if os.path.exists(context_file):
+                    file_stats = os.stat(context_file)
+                    file_info = {
+                        "size": file_stats.st_size,
+                        "created": file_stats.st_ctime,
+                        "modified": file_stats.st_mtime,
+                    }
+                
+                # Add context information
+                contexts.append({
+                    "id": node_id,
+                    "summary": node_data.get("summary", "No summary available"),
+                    "critical_entities": node_data.get("critical_entities", []),
+                    "creation_time": node_data.get("creation_time", 0),
+                    "access_count": node_data.get("access_count", 0),
+                    "last_accessed": node_data.get("last_accessed", 0),
+                    "file_info": file_info,
+                    "source": node_data.get("metadata", {}).get("source", "unknown")
+                })
+        
+        # If no contexts found in graph, try to read from JSON files directly
+        if len(contexts) == 0 and len(context_files) > 0:
+            print("No contexts found in graph, reading from JSON files")
+            for context_file in context_files:
+                try:
+                    with open(context_file, 'r') as f:
+                        context_data = json.load(f)
+                    
+                    # Extract context ID from filename
+                    filename = os.path.basename(context_file)
+                    context_id = os.path.splitext(filename)[0]
+                    
+                    # Get file stats
+                    file_stats = os.stat(context_file)
+                    file_info = {
+                        "size": file_stats.st_size,
+                        "created": file_stats.st_ctime,
+                        "modified": file_stats.st_mtime,
+                    }
+                    
+                    # Add context information from JSON file
+                    contexts.append({
+                        "id": context_id,
+                        "summary": context_data.get("summary", "No summary available"),
+                        "critical_entities": context_data.get("critical_entities", []),
+                        "creation_time": context_data.get("creation_time", 0),
+                        "access_count": context_data.get("access_count", 0),
+                        "last_accessed": context_data.get("last_accessed", 0),
+                        "file_info": file_info,
+                        "source": context_data.get("metadata", {}).get("source", "unknown")
+                    })
+                except Exception as e:
+                    print(f"Error reading context file {context_file}: {str(e)}")
+        
+        # Sort by creation time (newest first)
+        contexts.sort(key=lambda x: x.get("creation_time", 0), reverse=True)
+        
+        # Add system storage information
+        storage_info = {
+            "data_directory": data_dir,
+            "total_contexts": len(contexts),
+            "total_size": sum(ctx.get("file_info", {}).get("size", 0) for ctx in contexts)
+        }
+        
+        return jsonify({
+            "success": True,
+            "contexts": contexts,
+            "storage_info": storage_info
+        })
+    except Exception as e:
+        import traceback
+        print(f"Error retrieving contexts: {str(e)}")
+        print(traceback.format_exc())
+        return jsonify({
+            "success": False,
+            "message": f"Error retrieving contexts: {str(e)}"
+        }), 500
+
+
+# Add a welcome route for direct Flask access
+@app.route('/')
+def welcome():
+    return """
+    <html>
+        <head>
+            <title>ACWMF API Server</title>
+            <style>
+                body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+                h1 { color: #1976d2; }
+                .container { border: 1px solid #ddd; padding: 20px; border-radius: 5px; }
+                .note { background-color: #fff9c4; padding: 10px; border-radius: 5px; }
+            </style>
+        </head>
+        <body>
+            <h1>Adaptive Compressed World Model Framework</h1>
+            <div class="container">
+                <h2>API Server Running</h2>
+                <p>This is the Flask backend API server for the ACWMF.</p>
+                <p>This server provides the API endpoints for the Next.js frontend.</p>
+                
+                <div class="note">
+                    <strong>Note:</strong> Please access the application through the Next.js frontend at:
+                    <a href="http://localhost:3000">http://localhost:3000</a>
+                </div>
+                
+                <h3>API Endpoints:</h3>
+                <ul>
+                    <li><code>/api/status</code> - Get system status</li>
+                    <li><code>/api/init</code> - Initialize knowledge system</li>
+                    <li><code>/api/add_knowledge</code> - Add knowledge</li>
+                    <li><code>/api/query_knowledge</code> - Query knowledge</li>
+                    <li><code>/api/graph_data</code> - Get graph data</li>
+                    <li>And more...</li>
+                </ul>
+            </div>
+        </body>
+    </html>
+    """
+
+
+# Error handler for unexpected exceptions
+@app.errorhandler(Exception)
+def handle_exception(e):
+    """Handle unexpected exceptions with a proper error response"""
+    import traceback
+    app.logger.error(f"Unhandled exception: {str(e)}")
+    app.logger.error(traceback.format_exc())
+    return jsonify({
+        "success": False,
+        "error": "Internal server error",
+        "message": str(e)
+    }), 500
 
 # Main entry point
 if __name__ == "__main__":
+    # Set up logging
+    import logging
+    logging.basicConfig(level=logging.INFO)
+    app.logger.setLevel(logging.INFO)
+    app.logger.info(f"Data directory: {data_dir}")
+    
+    # Print important information for debugging
+    app.logger.info(f"System architecture: {os.uname().machine}")
+    app.logger.info(f"Python version: {sys.version}")
+    
     # Initialize knowledge system with default settings
     init_knowledge_system(use_llm=True)
+    
+    # Run the Flask application
     app.run(debug=True, host='0.0.0.0', port=5000)

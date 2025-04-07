@@ -76,6 +76,7 @@ export default function MainLayout({
     { label: 'Query', path: '/query' },
     { label: 'Relationships', path: '/relationships' },
     { label: 'Communities', path: '/communities' },
+    { label: 'Data', path: '/data' },
     { label: 'Settings', path: '/settings' },
   ];
 

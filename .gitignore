@@ -106,6 +106,7 @@ wandb/
 runs/
 experiments/
 checkpoints/
+data/
 
 # Node.js
 node_modules/

@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { AppContextProvider } from '@/contexts/AppContext';
+import { KnowledgeContextProvider } from '@/contexts/KnowledgeContext';
 import { CircularProgress, Box, Typography, Button } from '@mui/material';
 import MainLayout from '@/components/MainLayout';
 import { useAppContext } from '@/contexts/AppContext';

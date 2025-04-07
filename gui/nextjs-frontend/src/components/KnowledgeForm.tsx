@@ -320,7 +320,7 @@ const KnowledgeForm: React.FC<KnowledgeFormProps> = ({ showNotification }) => {
           <input
             type="file"
             hidden
-            accept=".txt,.md,.csv,.json,.xml,.html"
+            accept=".txt,.md,.csv,.json,.xml,.html,.pdf,.xlsx,.xls,.docx,.doc"
             onChange={handleFileChange}
           />
         </Button>
